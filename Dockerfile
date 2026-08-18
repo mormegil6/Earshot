@@ -17,12 +17,15 @@ COPY ./webtools/ /app
 ENV PATH /app/node_modules/.bin:$PATH
 
 # install and cache dependencies
-# yarn 1.x defaults --network-timeout to 30 s, and that ceiling covers the CPU
-# time yarn spends alongside each request, not transfer alone. On a slower build
-# host it expires mid-install and yarn reports it as "There appears to be trouble
-# with your network connection", which points at the wrong subsystem. Raised so
-# the install can finish; it costs nothing on a fast host, where the install
-# completes long before the ceiling is in reach.
+# yarn 1.x defaults --network-timeout to 30 s, which is a ceiling on each
+# request INCLUDING the CPU time yarn spends alongside it. On a slower build
+# host that expires mid-install and yarn reports it as "There appears to be
+# trouble with your network connection", which reads like a network fault and
+# is not one. Measured on a Raspberry Pi 4 (arm64, native, not emulated): this
+# install needs 145 s and yarn stays CPU-bound at 100-148 % the whole time,
+# while the package it died on fetches in 0.23 s from inside this same image.
+# The raised ceiling costs nothing on a fast host, where the install finishes
+# long before any timeout is in reach.
 RUN yarn --network-timeout 600000
 #build the project for production
 RUN yarn build
@@ -83,11 +86,14 @@ RUN cd /tmp/ && \
   tar zxf ${FFMPEG_VERSION}.tar.gz && rm ${FFMPEG_VERSION}.tar.gz
 
 # ffmpeg's DASH muxer hardcodes suggestedPresentationDelay to the last
-# segment duration, so a player joining live starts right at the edge and
-# can gap-jump into a segment that has not finished writing yet. No muxer
-# flag controls SPD directly (-target_latency is force-zeroed outside
-# LL-DASH mode, which WebM segments cannot use), so this floors it at the
-# source instead.
+# segment duration, so live players join right at the edge and gap-jump into
+# not-yet-written segments. No muxer flag controls SPD (-target_latency is
+# force-zeroed unless LL-DASH -streaming/-write_prft, which WebM segments
+# cannot use), so give it a floor at the source instead.
+# The guard is anchored to the suggestedPresentationDelay= line at BOTH ends:
+# if upstream restructures that line the sed becomes a no-op, and an
+# unanchored post-check could still match an unrelated FFMAX() elsewhere in
+# the file and ship a build silently missing this patch.
 ARG DASH_SPD_FLOOR=30
 RUN cd /tmp/FFmpeg-${FFMPEG_VERSION} && \
   case "${DASH_SPD_FLOOR}" in (""|*[!0-9]*) echo "DASH_SPD_FLOOR must be a non-negative integer" >&2; exit 1;; esac && \
@@ -175,7 +181,8 @@ RUN apk add --update \
   x265-dev \
   inotify-tools \
   certbot \
-  sudo
+  sudo \
+  socat
 
 COPY --from=1 /opt/ffmpeg/bin/ffmpeg /usr/local/bin
 COPY --from=1 /usr/local/nginx /usr/local/nginx
@@ -208,9 +215,11 @@ RUN set -x ; \
 
 COPY nginx-transcoder/entrypoint.sh nginx-letsencrypt
 COPY nginx-transcoder/certbot.sh certbot.sh
+COPY nginx-transcoder/direct-dash-gate.sh /usr/local/bin/direct-dash-gate.sh
 COPY nginx-transcoder/ssl-options/ /etc/ssl-options
 RUN chmod +x nginx-letsencrypt && \
-    chmod +x certbot.sh
+    chmod +x certbot.sh && \
+    chmod +x /usr/local/bin/direct-dash-gate.sh
 
 #CMD rm -rf /opt/data && mkdir -p /opt/data/dash && chown nginx /opt/data/dash && chmod 777 /opt/data/dash && mkdir -p /www && \
 #  envsubst "$(env | sed -e 's/=.*//' -e 's/^/\$/g')" < \
