@@ -1,0 +1,25 @@
+# This repo is a submodule build context for downstream consumers
+# (docker-compose.yml's `context: ./services/earshot/src` in
+# mormegil6/ambisonic-box). A submodule checkout carries the FULL repo tree,
+# not the hand-curated subset a vendored copy used to have, so this is an
+# explicit allowlist rather than a denylist: exclude everything, then
+# un-exclude exactly what the Dockerfile's COPY/ADD instructions read.
+#
+# Keeps tester/ (Git LFS: a prebuilt ffmpeg binary + a wav fixture, ~45 MB,
+# unused by this image), Cloudformation/, templates/, docs and repo metadata
+# out of every build's context - none of it is needed, and none of it was
+# vendored here before either.
+**
+
+!Dockerfile
+!webtools
+!webtools/**
+!nginx-transcoder/nginx.conf
+!nginx-transcoder/nginx-no-ssl.conf
+!nginx-transcoder/static
+!nginx-transcoder/static/**
+!nginx-transcoder/entrypoint.sh
+!nginx-transcoder/certbot.sh
+!nginx-transcoder/direct-dash-gate.sh
+!nginx-transcoder/ssl-options
+!nginx-transcoder/ssl-options/**
