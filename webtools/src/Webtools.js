@@ -90,12 +90,17 @@ export default class Webtools extends React.Component {
         const modified = new Date(res.headers["last-modified"]).getTime();
         const served = new Date(res.headers.date).getTime();
         if (modified && served && served - modified < 20000) {
-          stateUpdate.streamNames = [dashName];
-          stateUpdate.directStream = true;
+          const freshStateUpdate = {
+            ...stateUpdate,
+            streamNames: [dashName],
+            directStream: true,
+            statRetryTimer: DEFAULT_STAT_REFRESH_PERIOD,
+          };
           if (self.state.selectedStream === null) {
-            stateUpdate.selectedStream = dashName;
+            freshStateUpdate.selectedStream = dashName;
           }
-          stateUpdate.statRetryTimer = DEFAULT_STAT_REFRESH_PERIOD;
+          Webtools.applyStatUpdate(self, freshStateUpdate);
+          return;
         }
         Webtools.applyStatUpdate(self, stateUpdate);
       })
@@ -134,6 +139,9 @@ export default class Webtools extends React.Component {
     super(props);
     this.state = {
       ffmpegFlags: null,
+      // Read via self.state.dashName in the static probeDirectStream/loadStat
+      // methods, which the plugin's this.state-only analysis can't trace.
+      // eslint-disable-next-line react/no-unused-state
       dashName: null,
       directStream: false,
       streamNames: null,
@@ -168,7 +176,9 @@ export default class Webtools extends React.Component {
       this.setState({
         ffmpegFlags: response.data.ffmpegFlags,
         // which manifest the direct (non-RTMP) path writes; feeds the
-        // stat-less stream discovery in probeDirectStream
+        // stat-less stream discovery in probeDirectStream. See the
+        // constructor's dashName field for why this is a false positive.
+        // eslint-disable-next-line react/no-unused-state
         dashName: response.data.dashName,
       });
     });
