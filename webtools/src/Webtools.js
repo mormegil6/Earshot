@@ -54,11 +54,17 @@ export default class Webtools extends React.Component {
               [stateUpdate.selectedStream] = streamNames;
             }
             stateUpdate.statRetryTimer = DEFAULT_STAT_REFRESH_PERIOD;
+            stateUpdate.directStream = false;
+            Webtools.applyStatUpdate(self, stateUpdate);
+            return;
           }
-          self.setState(stateUpdate);
-          setTimeout(() => {
-            Webtools.loadStat(self);
-          }, stateUpdate.statRetryTimer * 1000);
+          // No RTMP publisher does not mean no stream: the SRT direct path
+          // (gateway -> tcp listener -> DASH) never appears in nginx-rtmp's
+          // stat page, but it writes the exact manifest this page plays. A
+          // manifest the server modified within the last few seconds IS a
+          // live stream; comparing the server's own Date and Last-Modified
+          // headers keeps client clock skew out of the decision.
+          Webtools.probeDirectStream(self, stateUpdate);
         });
       })
       .catch(() => {
@@ -66,6 +72,48 @@ export default class Webtools extends React.Component {
           Webtools.loadStat(self);
         }, self.state.statRetryTimer * 1000);
       });
+  }
+
+  static probeDirectStream(self, stateUpdate) {
+    const { dashName } = self.state;
+    if (!dashName) {
+      Webtools.applyStatUpdate(self, stateUpdate);
+      return;
+    }
+    // HEAD, not GET: the freshness verdict is entirely in the headers, so
+    // there is no reason to pull the manifest body every poll.
+    axios
+      .head(`/dash/${dashName}.mpd`, {
+        headers: { "Cache-Control": "no-cache" },
+      })
+      .then((res) => {
+        const modified = new Date(res.headers["last-modified"]).getTime();
+        const served = new Date(res.headers.date).getTime();
+        if (modified && served && served - modified < 20000) {
+          const freshStateUpdate = {
+            ...stateUpdate,
+            streamNames: [dashName],
+            directStream: true,
+            statRetryTimer: DEFAULT_STAT_REFRESH_PERIOD,
+          };
+          if (self.state.selectedStream === null) {
+            freshStateUpdate.selectedStream = dashName;
+          }
+          Webtools.applyStatUpdate(self, freshStateUpdate);
+          return;
+        }
+        Webtools.applyStatUpdate(self, stateUpdate);
+      })
+      .catch(() => {
+        Webtools.applyStatUpdate(self, stateUpdate);
+      });
+  }
+
+  static applyStatUpdate(self, stateUpdate) {
+    self.setState(stateUpdate);
+    setTimeout(() => {
+      Webtools.loadStat(self);
+    }, stateUpdate.statRetryTimer * 1000);
   }
 
   static extractServerInfo(statResponse) {
@@ -91,6 +139,11 @@ export default class Webtools extends React.Component {
     super(props);
     this.state = {
       ffmpegFlags: null,
+      // Read via self.state.dashName in the static probeDirectStream/loadStat
+      // methods, which the plugin's this.state-only analysis can't trace.
+      // eslint-disable-next-line react/no-unused-state
+      dashName: null,
+      directStream: false,
       streamNames: null,
       selectedStream: null,
       serverInfo: null,
@@ -99,8 +152,13 @@ export default class Webtools extends React.Component {
   }
 
   componentDidMount() {
-    Webtools.loadStat(this);
-    this.loadEarshotInfo();
+    // Order matters: /nginxInfo carries the manifest name the direct-stream
+    // probe needs, and the two used to race. When stat answered first on a
+    // direct stream, dashName was still null, the probe bailed, and discovery
+    // waited out a whole doubled retry - the 1-2 s of extra "Searching for
+    // streams" the operator saw on 2026-08-09. Chain instead, and start the
+    // stat loop even if /nginxInfo fails (RTMP discovery still works).
+    this.loadEarshotInfo().finally(() => Webtools.loadStat(this));
   }
 
   BW_TRANSFORM_FN = (bwIn) =>
@@ -114,8 +172,15 @@ export default class Webtools extends React.Component {
   };
 
   loadEarshotInfo() {
-    axios.get(NGINX_INFO_URL).then((response) => {
-      this.setState({ ffmpegFlags: response.data.ffmpegFlags });
+    return axios.get(NGINX_INFO_URL).then((response) => {
+      this.setState({
+        ffmpegFlags: response.data.ffmpegFlags,
+        // which manifest the direct (non-RTMP) path writes; feeds the
+        // stat-less stream discovery in probeDirectStream. See the
+        // constructor's dashName field for why this is a false positive.
+        // eslint-disable-next-line react/no-unused-state
+        dashName: response.data.dashName,
+      });
     });
   }
 
@@ -140,11 +205,17 @@ export default class Webtools extends React.Component {
   }
 
   renderServerInfo() {
-    const { serverInfo } = this.state;
+    const { serverInfo, directStream } = this.state;
     const rows = Object.keys(serverInfo).map((key) => {
-      const serverInfoValue = this.SERVER_INFO_TRANSFORM[key]
+      let serverInfoValue = this.SERVER_INFO_TRANSFORM[key]
         ? this.SERVER_INFO_TRANSFORM[key](serverInfo[key])
         : serverInfo[key];
+      // nclients counts RTMP connections, which a direct (SRT -> tcp
+      // listener) stream has none of - a bare "0" beside a stream that is
+      // plainly playing reads as a fault. Say which zero it is.
+      if (key === "nclients" && directStream) {
+        serverInfoValue = "0 (direct stream, no RTMP clients)";
+      }
 
       return (
         <TableRow key={key}>
