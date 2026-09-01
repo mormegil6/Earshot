@@ -20,6 +20,23 @@ case "$DASH_NAME" in
 esac
 export DASH_NAME
 
+# Codec of the silent stereo keep-alive track that every transcoder line adds
+# (nginx-no-ssl.conf explains why the track exists). It has to share a
+# container with the other two tracks, and the container is whatever
+# -dash_segment_type in FFMPEG_FLAGS says: WebM's muxer refuses AAC at header
+# time ("Only VP8 or VP9 or AV1 video and Vorbis or Opus audio ... are
+# supported for WebM") and the whole transcode dies with it, measured against
+# the .env.example VP9 line. So the WebM opt-in gets Opus, which Safari's MSE
+# does accept in WebM, and everything else gets AAC, the only audio codec it
+# accepts in fMP4. Under the default and under auto (per-stream) segment
+# typing AAC lands in fMP4 either way. Decided here, once, so the three exec
+# sites cannot disagree; exported for the same reason as DASH_NAME above.
+case " ${FFMPEG_FLAGS:-} " in
+    *" -dash_segment_type webm "*) KEEPALIVE_CODEC=libopus ;;
+    *)                             KEEPALIVE_CODEC=aac ;;
+esac
+export KEEPALIVE_CODEC
+
 if [ "$SSL_ENABLED" = true ] ; then
 
 	if [ "$DOMAIN" = "" ]; then
