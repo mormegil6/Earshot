@@ -21,19 +21,28 @@ esac
 export DASH_NAME
 
 # Codec of the silent stereo keep-alive track that every transcoder line adds
-# (nginx-no-ssl.conf explains why the track exists). It has to share a
-# container with the other two tracks, and the container is whatever
-# -dash_segment_type in FFMPEG_FLAGS says: WebM's muxer refuses AAC at header
-# time ("Only VP8 or VP9 or AV1 video and Vorbis or Opus audio ... are
-# supported for WebM") and the whole transcode dies with it, measured against
-# the .env.example VP9 line. So the WebM opt-in gets Opus, which Safari's MSE
-# does accept in WebM, and everything else gets AAC, the only audio codec it
-# accepts in fMP4. Under the default and under auto (per-stream) segment
-# typing AAC lands in fMP4 either way. Decided here, once, so the three exec
-# sites cannot disagree; exported for the same reason as DASH_NAME above.
+# (nginx-no-ssl.conf explains why the track exists). All three tracks must land
+# in ONE container, and the muxers disagree about what they accept: WebM refuses
+# AAC at header time ("Only VP8 or VP9 or AV1 video and Vorbis or Opus audio ...
+# are supported for WebM") and takes the whole transcode down with it, while
+# Safari's MSE refuses Opus-in-fMP4, which is the surface dash.js asks.
+#
+# So AAC is chosen ONLY when FFMPEG_FLAGS pins every stream to fMP4 with an
+# explicit -dash_segment_type mp4, which is what the committed default does.
+# Anything else gets Opus, because dashenc's per-stream "auto" typing (also the
+# behaviour when -dash_segment_type is absent) picks a container per codec: with
+# VP9 video it writes init-stream0.webm and init-stream1.webm for video and the
+# Opus programme, and an AAC keep-alive would land beside them in
+# init-stream2.m4s - a mixed-container manifest, which this project forbids and
+# which was measured, not assumed. Opus is muxable in both containers, so it can
+# never split the manifest whatever dashenc decides.
+#
+# Decided here, once, so the exec sites cannot disagree; exported for the same
+# reason as DASH_NAME above. scripts/test-pipeline.sh mirrors this rule to know
+# which codec to assert, so the two must be changed together.
 case " ${FFMPEG_FLAGS:-} " in
-    *" -dash_segment_type webm "*) KEEPALIVE_CODEC=libopus ;;
-    *)                             KEEPALIVE_CODEC=aac ;;
+    *" -dash_segment_type mp4 "*) KEEPALIVE_CODEC=aac ;;
+    *)                            KEEPALIVE_CODEC=libopus ;;
 esac
 export KEEPALIVE_CODEC
 
