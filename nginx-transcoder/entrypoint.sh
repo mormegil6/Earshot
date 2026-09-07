@@ -104,11 +104,17 @@ fi
 #
 # THIS ffmpeg on purpose: the SPD floor (DASH_SPD_FLOOR) and the PCE-aware
 # decode exist only in this image's build, and /opt/data/dash tolerates exactly
-# one writer, which this container already is. Two fixed-layout listeners
-# rather than one parameterised one, because the join filter depends on the
-# probed track count and two dumb listeners beat a smart handshake:
-#   9100 - 4x4ch tracks (3rd order), joined to hexadecagonal
-#   9101 - 1x4ch track  (1st order), passthrough map
+# one writer, which this container already is. Fixed-layout listeners rather
+# than one parameterised one, because the join filter depends on the probed
+# track count and the MP4 codec tag depends on the probed video codec, and
+# dumb listeners beat a smart handshake. The port carries both:
+#   9100 - 4x4ch tracks (3rd order), joined to hexadecagonal, H.264 (avc1)
+#   9101 - 1x4ch track  (1st order), passthrough map,         H.264 (avc1)
+#   9102 - 4x4ch tracks (3rd order), joined to hexadecagonal, H.265 (hvc1)
+#   9103 - 1x4ch track  (1st order), passthrough map,         H.265 (hvc1)
+# An older gateway only ever dials 9100/9101, so those two keep their exact
+# former meaning and a version-skewed deployment loses H.265 rather than
+# breaking H.264.
 # Ports are compose-internal only; nothing publishes them. socat accepts one
 # connection, hands it to the peer-IP gate, and the ffmpeg that gate execs
 # transcodes until EOF and exits; the loop re-arms it. Idle
@@ -160,16 +166,25 @@ if [ "${SRT_DIRECT_LISTENERS:-1}" = "1" ]; then
 		# socat process (the gate script exits without exec'ing ffmpeg), so a
 		# hostile prober cannot wedge the port by connecting and going silent
 		# - it is indistinguishable from one failed accept cycle.
-		( while :; do
-			echo "[direct-dash] 9100 (4x4) listening" >> /tmp/nginx_rtmp_ffmpeg_log
-			su -s /bin/sh nginx -c "socat -u TCP-LISTEN:9100,reuseaddr SYSTEM:'/usr/local/bin/direct-dash-gate.sh 9100'" >> /tmp/nginx_rtmp_ffmpeg_log 2>&1
-			sleep 1
-		done ) &
-		( while :; do
-			echo "[direct-dash] 9101 (1x4) listening" >> /tmp/nginx_rtmp_ffmpeg_log
-			su -s /bin/sh nginx -c "socat -u TCP-LISTEN:9101,reuseaddr SYSTEM:'/usr/local/bin/direct-dash-gate.sh 9101'" >> /tmp/nginx_rtmp_ffmpeg_log 2>&1
-			sleep 1
-		done ) &
+		# One listener per (track count, video codec) pair, because the port
+		# is what tells the gate script which -tag:v to use and the tag
+		# cannot be deferred to ffmpeg (rationale in direct-dash-gate.sh).
+		# The subshell forks with the loop variable's CURRENT value, so each
+		# arming loop keeps its own port; nothing here depends on the loop
+		# still running. Parsed with parameter expansion rather than `set --`
+		# on purpose: this script's positional parameters are not ours to
+		# clobber.
+		for spec in 9100:4x4:H.264 9101:1x4:H.264 9102:4x4:H.265 9103:1x4:H.265; do
+			p=${spec%%:*}
+			rest=${spec#*:}
+			shape=${rest%%:*}
+			vcodec=${rest#*:}
+			( while :; do
+				echo "[direct-dash] $p ($shape $vcodec) listening" >> /tmp/nginx_rtmp_ffmpeg_log
+				su -s /bin/sh nginx -c "socat -u TCP-LISTEN:$p,reuseaddr SYSTEM:'/usr/local/bin/direct-dash-gate.sh $p'" >> /tmp/nginx_rtmp_ffmpeg_log 2>&1
+				sleep 1
+			done ) &
+		done
 		# Watchdog for a WEDGED listener: an abruptly killed feeder can leave
 		# the accepting process holding a CLOSE_WAIT socket it never reads
 		# (observed live 2026-08-09 against the former direct ffmpeg listener:
@@ -192,7 +207,7 @@ if [ "${SRT_DIRECT_LISTENERS:-1}" = "1" ]; then
 		su -s /bin/sh nginx -c '
 		while :; do
 			sleep 15
-			for port in 9100 9101; do
+			for port in 9100 9101 9102 9103; do
 				if netstat -tn 2>/dev/null | grep ":$port" | grep -q CLOSE_WAIT; then
 					sleep 10
 					if netstat -tn 2>/dev/null | grep ":$port" | grep -q CLOSE_WAIT; then
@@ -236,7 +251,7 @@ if [ "${SRT_DIRECT_LISTENERS:-1}" = "1" ]; then
 				kill -9 "$pid" 2>/dev/null
 			done
 		done' &
-		echo "SRT direct-DASH listeners armed on :9100 (4x4) and :9101 (1x4), peer-IP gated, CLOSE_WAIT watchdog on both"
+		echo "SRT direct-DASH listeners armed on :9100 (4x4 H.264), :9101 (1x4 H.264), :9102 (4x4 H.265) and :9103 (1x4 H.265), peer-IP gated, CLOSE_WAIT watchdog on all four"
 	else
 		echo "SRT direct-DASH listeners DISABLED: no hexadecagonal layout in this ffmpeg"
 	fi
