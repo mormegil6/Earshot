@@ -223,12 +223,6 @@ ADD nginx-transcoder/static /www/static
 # Cleanup.
 RUN rm -rf /var/cache/* /tmp/*
 
-# Copy special FFMPEG build for alpine
-# Uses pkviet's pce2 fork which supports PCE headers in RTMP
-# This is required to properly decode 16.0 RTMP from OBS-ME
-#
-# https://github.com/pkviet/FFmpeg
-
 COPY --from=0 /app/build /www/webtools
 
 EXPOSE 1935
