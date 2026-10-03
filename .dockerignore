@@ -21,5 +21,6 @@
 !nginx-transcoder/entrypoint.sh
 !nginx-transcoder/certbot.sh
 !nginx-transcoder/direct-dash-gate.sh
+!nginx-transcoder/rtmp-transcode.sh
 !nginx-transcoder/ssl-options
 !nginx-transcoder/ssl-options/**

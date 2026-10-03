@@ -236,10 +236,11 @@ RUN set -x ; \
 COPY nginx-transcoder/entrypoint.sh nginx-letsencrypt
 COPY nginx-transcoder/certbot.sh certbot.sh
 COPY nginx-transcoder/direct-dash-gate.sh /usr/local/bin/direct-dash-gate.sh
+COPY nginx-transcoder/rtmp-transcode.sh /usr/local/bin/rtmp-transcode.sh
 COPY nginx-transcoder/ssl-options/ /etc/ssl-options
 RUN chmod +x nginx-letsencrypt && \
     chmod +x certbot.sh && \
-    chmod +x /usr/local/bin/direct-dash-gate.sh
+    chmod +x /usr/local/bin/direct-dash-gate.sh /usr/local/bin/rtmp-transcode.sh
 
 #CMD rm -rf /opt/data && mkdir -p /opt/data/dash && chown nginx /opt/data/dash && chmod 777 /opt/data/dash && mkdir -p /www && \
 #  envsubst "$(env | sed -e 's/=.*//' -e 's/^/\$/g')" < \

@@ -119,7 +119,7 @@ fi
 # connection, hands it to the peer-IP gate, and the ffmpeg that gate execs
 # transcodes until EOF and exits; the loop re-arms it. Idle
 # listeners cost nothing. Audio bitrates follow the gateway's 96 kbit/s per
-# channel rule (16 ch matches the RTMP relay's 1024k closely enough for A/B).
+# channel rule, which the RTMP relay applies too (rtmp-transcode.sh).
 # The join map is derived from THIS ffmpeg's own layout table, exactly as the
 # gateway's build_join_map() does: merged channel g IS track g/4's channel g%4.
 if [ "${SRT_DIRECT_LISTENERS:-1}" = "1" ]; then
