@@ -1,11 +1,12 @@
-# set the base image
-# n/b: for production, node is only used for building
-# the static Html and javascript files
-# as react creates static html and js files after build
-# these are what will be served by nginx
-# use alias build to be easier to refer this container elsewhere
-# e.g inside nginx container
-FROM node:24-alpine3.24
+# Node only builds the web tools: react turns them into static HTML and JS,
+# which nginx in the release image serves. That output does not depend on the
+# CPU, so this stage runs on the BUILD platform and one copy of it goes into
+# every target image (checked 2026-10-25: all 55 files under /www/webtools are
+# byte-identical between the published amd64 and arm64 v1.3.8 images). Built
+# per target instead, a cross-build ran yarn under QEMU for the arm64 leg,
+# which took about 17 minutes and once died there with SIGILL, leaving the
+# build hung until the CI job timed out six hours later.
+FROM --platform=$BUILDPLATFORM node:24-alpine3.24 AS webtools
 # set working directory
 # this is the working folder in the container
 # from which the app will be running from
@@ -223,7 +224,7 @@ ADD nginx-transcoder/static /www/static
 # Cleanup.
 RUN rm -rf /var/cache/* /tmp/*
 
-COPY --from=0 /app/build /www/webtools
+COPY --from=webtools /app/build /www/webtools
 
 EXPOSE 1935
 EXPOSE 8000

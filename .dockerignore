@@ -14,6 +14,10 @@
 !Dockerfile
 !webtools
 !webtools/**
+# ...except a local install: the image runs its own `yarn`, and a node_modules
+# left by `yarn` on a developer's machine (macOS binaries included) would be
+# copied in ahead of it and used as is.
+webtools/node_modules
 !nginx-transcoder/nginx.conf
 !nginx-transcoder/nginx-no-ssl.conf
 !nginx-transcoder/static
