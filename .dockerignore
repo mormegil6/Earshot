@@ -18,6 +18,7 @@
 # left by `yarn` on a developer's machine (macOS binaries included) would be
 # copied in ahead of it and used as is.
 webtools/node_modules
+webtools/build
 !nginx-transcoder/nginx.conf
 !nginx-transcoder/nginx-no-ssl.conf
 !nginx-transcoder/static
