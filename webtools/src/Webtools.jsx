@@ -1,6 +1,5 @@
 import axios from "axios";
 import React from "react";
-import xml2js from "xml2js";
 import moment from "moment";
 import Table from "@material-ui/core/Table";
 import TableBody from "@material-ui/core/TableBody";
@@ -8,26 +7,44 @@ import TableCell from "@material-ui/core/TableCell";
 import TableRow from "@material-ui/core/TableRow";
 
 import DashPlayer from "./DashPlayer";
+import parseStat from "./parseStat";
 
 const STAT_URL = "/stat";
 const NGINX_INFO_URL = "/nginxInfo";
 
 const SERVER_INFO_FIELDS = {
-  bandwidthIn: "bw_in",
+  bwIn: "bw_in",
   bytesIn: "bytes_in",
   bwOut: "bw_out",
-  totalBytesOut: "bytes_out",
+  bytesOut: "bytes_out",
   uptime: "uptime",
-  nclients: "nclients",
 };
 
 const SERVER_INFO_FIELD_NAMES = {
-  bandwidthIn: "Bandwidth In",
+  bwIn: "Bandwidth In",
   bytesIn: "Total Bytes In",
   bwOut: "Bandwidth Out",
   bytesOut: "Total Bytes Out",
   uptime: "Server Uptime",
   nclients: "Num Clients",
+};
+
+const bwToText = (bw) =>
+  `${parseFloat((bw / (1024 * 1024)).toPrecision(4))}Mb/s`;
+
+const bytesToText = (bytes) => {
+  if (bytes > 1024 * 1024 * 1024) {
+    return `${parseFloat((bytes / (1024 * 1024 * 1024)).toPrecision(4))}GB`;
+  }
+  return `${parseFloat((bytes / (1024 * 1024)).toPrecision(4))}MB`;
+};
+
+const SERVER_INFO_TRANSFORM = {
+  uptime: (uptime) => moment.duration(uptime, "seconds").humanize(),
+  bwIn: bwToText,
+  bwOut: bwToText,
+  bytesIn: bytesToText,
+  bytesOut: bytesToText,
 };
 
 const DEFAULT_STAT_REFRESH_PERIOD = 4; // seconds
@@ -39,33 +56,32 @@ export default class Webtools extends React.Component {
         "Content-Type": "application/xml; charset=utf-8",
       })
       .then((response) => {
-        xml2js.parseString(response.data, (err, result) => {
-          const serverInfo = Webtools.extractServerInfo(result);
-          const liveInfo = result.rtmp.server[0].application[0].live[0];
-          serverInfo.nclients = liveInfo.nclients;
-          const stateUpdate = {
-            serverInfo,
-            statRetryTimer: self.state.statRetryTimer * 2,
-          };
-          if (liveInfo.stream) {
-            const streamNames = liveInfo.stream.map((stream) => stream.name[0]);
-            stateUpdate.streamNames = streamNames;
-            if (self.state.selectedStream === null) {
-              [stateUpdate.selectedStream] = streamNames;
-            }
-            stateUpdate.statRetryTimer = DEFAULT_STAT_REFRESH_PERIOD;
-            stateUpdate.directStream = false;
-            Webtools.applyStatUpdate(self, stateUpdate);
-            return;
+        const result = parseStat(response.data);
+        const serverInfo = Webtools.extractServerInfo(result);
+        const liveInfo = result.rtmp.server[0].application[0].live[0];
+        serverInfo.nclients = liveInfo.nclients;
+        const stateUpdate = {
+          serverInfo,
+          statRetryTimer: self.state.statRetryTimer * 2,
+        };
+        if (liveInfo.stream) {
+          const streamNames = liveInfo.stream.map((stream) => stream.name[0]);
+          stateUpdate.streamNames = streamNames;
+          if (self.state.selectedStream === null) {
+            [stateUpdate.selectedStream] = streamNames;
           }
-          // No RTMP publisher does not mean no stream: the SRT direct path
-          // (gateway -> tcp listener -> DASH) never appears in nginx-rtmp's
-          // stat page, but it writes the exact manifest this page plays. A
-          // manifest the server modified within the last few seconds IS a
-          // live stream; comparing the server's own Date and Last-Modified
-          // headers keeps client clock skew out of the decision.
-          Webtools.probeDirectStream(self, stateUpdate);
-        });
+          stateUpdate.statRetryTimer = DEFAULT_STAT_REFRESH_PERIOD;
+          stateUpdate.directStream = false;
+          Webtools.applyStatUpdate(self, stateUpdate);
+          return;
+        }
+        // No RTMP publisher does not mean no stream: the SRT direct path
+        // (gateway -> tcp listener -> DASH) never appears in nginx-rtmp's
+        // stat page, but it writes the exact manifest this page plays. A
+        // manifest the server modified within the last few seconds IS a
+        // live stream; comparing the server's own Date and Last-Modified
+        // headers keeps client clock skew out of the decision.
+        Webtools.probeDirectStream(self, stateUpdate);
       })
       .catch(() => {
         setTimeout(() => {
@@ -120,20 +136,12 @@ export default class Webtools extends React.Component {
     const serverInfo = {};
     Object.keys(SERVER_INFO_FIELDS).forEach((key) => {
       const responseKey = SERVER_INFO_FIELDS[key];
-      if (statResponse.rtmp[key]) {
+      if (statResponse.rtmp[responseKey]) {
         [serverInfo[key]] = statResponse.rtmp[responseKey];
       }
     });
     return serverInfo;
   }
-
-  SERVER_INFO_TRANSFORM = {
-    uptime: (uptime) => moment.duration(uptime, "seconds").humanize(),
-    bwIn: this.BW_TRANSFORM_FN,
-    bwOut: this.BW_TRANSFORM_FN,
-    bytesIn: this.BYTES_TRANSFORM_FN,
-    bytesOut: this.BYTES_TRANSFORM_FN,
-  };
 
   constructor(props) {
     super(props);
@@ -160,16 +168,6 @@ export default class Webtools extends React.Component {
     // stat loop even if /nginxInfo fails (RTMP discovery still works).
     this.loadEarshotInfo().finally(() => Webtools.loadStat(this));
   }
-
-  BW_TRANSFORM_FN = (bwIn) =>
-    `${parseFloat((bwIn / (1024 * 1024)).toPrecision(4))}Mb/s`;
-
-  BYTES_TRANSFORM_FN = (bytesIn) => {
-    if (bytesIn > 1024 * 1024 * 1024) {
-      return `${parseFloat((bytesIn / (1024 * 1024 * 1024)).toPrecision(4))}GB`;
-    }
-    return `${parseFloat((bytesIn / (1024 * 1024)).toPrecision(4))}MB`;
-  };
 
   loadEarshotInfo() {
     return axios.get(NGINX_INFO_URL).then((response) => {
@@ -207,8 +205,8 @@ export default class Webtools extends React.Component {
   renderServerInfo() {
     const { serverInfo, directStream } = this.state;
     const rows = Object.keys(serverInfo).map((key) => {
-      let serverInfoValue = this.SERVER_INFO_TRANSFORM[key]
-        ? this.SERVER_INFO_TRANSFORM[key](serverInfo[key])
+      let serverInfoValue = SERVER_INFO_TRANSFORM[key]
+        ? SERVER_INFO_TRANSFORM[key](serverInfo[key])
         : serverInfo[key];
       // nclients counts RTMP connections, which a direct (SRT -> tcp
       // listener) stream has none of - a bare "0" beside a stream that is
